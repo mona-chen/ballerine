@@ -38,6 +38,12 @@ export const processStepDataEndpoint = (templateParams?: StringKV): string =>
 export const getConfigEndpoint = (templateParams?: StringKV): string =>
   resolveEndpoint('getConfig', templateParams);
 
+export const getValidateBvnEndpoint = (templateParams?: StringKV): string =>
+  resolveEndpoint('validateBvn', templateParams);
+
+export const getSubmitLivenessResultEndpoint = (templateParams?: StringKV): string =>
+  resolveEndpoint('submitLivenessResult', templateParams);
+
 export const getAuthorizationHeader = (): string =>
   getBackendConfig().auth?.authorizationHeader || '';
 

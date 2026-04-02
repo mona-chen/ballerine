@@ -34,6 +34,8 @@ export const configuration: IAppConfiguration = {
       getConfig: '/v2/clients/{clientId}/config',
       uploadFile: '/collection-flow/files',
       updateContext: '/collection-flow/sync/context',
+      validateBvn: '/v2/enduser/verify/bvn',
+      submitLivenessResult: '/v2/enduser/verify/liveness',
     },
   },
   isDevelopment: false,

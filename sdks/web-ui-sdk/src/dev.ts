@@ -103,10 +103,28 @@ const ballerineInitConfig: FlowsInitOptions = {
           { name: Steps.Final, id: Steps.Final },
         ],
       },
+      ['bvn-liveness-flow']: {
+        steps: [
+          {
+            name: Steps.Welcome,
+            id: Steps.Welcome,
+          },
+          {
+            name: Steps.BvnCollection,
+            id: Steps.BvnCollection,
+          },
+          {
+            name: Steps.LivenessCheck,
+            id: Steps.LivenessCheck,
+          },
+          { name: Steps.Loading, id: Steps.Loading },
+          { name: Steps.Final, id: Steps.Final },
+        ],
+      },
     },
   },
   metricsConfig: {
-    enabled: true,
+    enabled: false, // Disable metrics in development to avoid CORS issues
   },
   backendConfig: {
     auth: {
@@ -119,7 +137,7 @@ console.log(ballerineInitConfig);
 
 void flows.init(ballerineInitConfig).then(() => {
   void flows.mount({
-    flowName: 'my-kyc-flow',
+    flowName: 'bvn-liveness-flow',
     useModal: true,
   });
 });

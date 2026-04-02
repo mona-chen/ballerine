@@ -717,6 +717,78 @@ const stepsTheme: TStepsConfigurations = [
       },
     ],
   },
+  {
+    name: Steps.BvnCollection,
+    id: Steps.BvnCollection,
+    namespace: Steps.BvnCollection,
+    elements: [
+      backIconButton,
+      closeIconButton,
+      {
+        id: 'title',
+        orderIndex: 30,
+        type: Elements.Title,
+        props: {},
+      },
+      {
+        id: 'description',
+        orderIndex: 40,
+        type: Elements.Paragraph,
+        props: {},
+      },
+      {
+        id: 'input',
+        orderIndex: 50,
+        type: Elements.Input,
+        props: {
+          attributes: {
+            placeholder: 'Enter 11-digit BVN',
+            type: 'text',
+            length: 11,
+          },
+        },
+      },
+      {
+        id: 'button',
+        orderIndex: 60,
+        type: Elements.Button,
+        props: {},
+      },
+    ],
+  },
+  {
+    name: Steps.LivenessCheck,
+    id: Steps.LivenessCheck,
+    namespace: Steps.LivenessCheck,
+    elements: [
+      backIconButton,
+      closeIconButton,
+      {
+        id: 'title',
+        orderIndex: 30,
+        type: Elements.Title,
+        props: {},
+      },
+      {
+        id: 'description',
+        orderIndex: 40,
+        type: Elements.Paragraph,
+        props: {},
+      },
+      {
+        id: 'video',
+        orderIndex: 50,
+        type: Elements.VideoContainer,
+        props: {},
+      },
+      {
+        id: 'button',
+        orderIndex: 60,
+        type: Elements.Button,
+        props: {},
+      },
+    ],
+  },
 ];
 
 export const uiTheme: IUIPackTheme & Pick<IAppConfigurationUI, 'settings'> = {

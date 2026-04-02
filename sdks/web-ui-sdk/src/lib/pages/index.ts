@@ -10,6 +10,8 @@ export { default as Final } from './Final.svelte';
 export { default as SelfieStart } from './SelfieStart.svelte';
 export { default as Selfie } from './Selfie.svelte';
 export { default as CheckSelfie } from './CheckSelfie.svelte';
+export { default as BvnCollection } from './BvnCollection.svelte';
+export { default as LivenessCheck } from './LivenessCheck.svelte';
 // export { default as Registration } from "./Registration.svelte";
 export { default as Loading } from './Loading.svelte';
 export { default as Resubmission } from './Resubmission.svelte';

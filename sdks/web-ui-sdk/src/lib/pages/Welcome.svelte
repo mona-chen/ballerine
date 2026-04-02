@@ -69,7 +69,7 @@
       <List configuration={element.props} />
     {/if}
     {#if element.type === Elements.Button}
-      <NextStepButton configuration={element.props}>
+      <NextStepButton configuration={element.props} skipType={undefined}>
         <T key="button" namespace={stepNamespace} />
       </NextStepButton>
     {/if}

@@ -6,6 +6,7 @@ export {
   currentStepIdx,
   currentStepId,
   currentParams,
+  bvnValue,
 } from './stores';
 export type {
   IAppState,

@@ -10,7 +10,7 @@
   export let isDisabled = false;
   export let isLoading = false;
   export let configuration: IElementProps;
-  export let skipType: string;
+  export let skipType: string | undefined;
 
   const background =
     $globalConfiguration.components?.button?.background ||

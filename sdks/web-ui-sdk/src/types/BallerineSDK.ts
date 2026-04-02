@@ -99,6 +99,11 @@ export interface FlowsBackendConfigEndpoints {
   getConfig?: string;
   uploadFile?: string;
   updateContext?: string;
+  validateBvn?: string;
+  submitLivenessResult?: string;
+  // Enhanced security endpoints
+  generateSessionToken?: string;
+  reportSuspiciousActivity?: string;
 }
 
 export interface FlowsBackendConfig {

@@ -207,6 +207,17 @@
       "button": "Close",
       "description": "It seems like there was an issue verifiying your documents."
     },
+    "bvn-collection": {
+      "title": "BVN Verification",
+      "description": "Please enter your 11-digit Bank Verification Number (BVN) to verify your identity.",
+      "placeholder": "Enter 11-digit BVN",
+      "button": "Continue"
+    },
+    "liveness-check": {
+      "title": "Liveness Check",
+      "description": "We need to verify that you're a real person. Please position your face in the camera and follow the instructions.",
+      "button": "Continue"
+    },
     "general": {
       "online": "You are online!",
       "offline": "You are offline, please check your connection",

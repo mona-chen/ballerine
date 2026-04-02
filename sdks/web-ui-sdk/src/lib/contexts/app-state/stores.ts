@@ -57,3 +57,6 @@ export const appState = derived(currentRoute, $currentRoute => {
 });
 
 export const currentStepId = writable<string>('welcome');
+
+// BVN value for liveness verification
+export const bvnValue = writable<string>('');

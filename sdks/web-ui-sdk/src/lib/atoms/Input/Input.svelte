@@ -11,7 +11,8 @@
 
   export let configuration: IElementProps;
   export let translationContext: string;
-  export let form: Writable<Record<string, string>>;
+  export let form: Writable<Record<string, string>> | undefined;
+  export let value = '';
 
   const input = {
     width: '100%',
@@ -28,12 +29,16 @@
     merge(input, $globalConfiguration.input || {}),
     styleProps,
   );
+
+  // Sync value with form if form is provided
+  $: if (form) {
+    $form[attributes.name] = value;
+  }
 </script>
 
 <input
   {style}
-  on:change
-  bind:value={$form[attributes.name]}
+  bind:value
   name={attributes.name}
   type="text"
   placeholder={t(translationContext, attributes.placeholder || '')}

@@ -11,6 +11,9 @@ currentLanguage.subscribe(lang => {
 });
 
 export const t = (namespace: string, key: string) => {
+  if (!namespace || typeof namespace !== 'string') {
+    return 'Missing translation: invalid namespace';
+  }
   let path = `${language}.${namespace}.${key}`;
 
   let text = get(texts, path);

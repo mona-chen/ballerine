@@ -97,6 +97,10 @@
   },
   "dependencies": {
     "@ballerine/common": "0.9.118",
+    "@mediapipe/camera_utils": "^0.3.0",
+    "@mediapipe/face_detection": "^0.4.0",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@tensorflow/tfjs": "^4.15.0",
     "@zerodevx/svelte-toast": "^0.8.0",
     "compressorjs": "^1.1.1",
     "deepmerge": "^4.3.0",

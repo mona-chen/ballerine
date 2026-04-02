@@ -5,6 +5,8 @@ import {
   getUpdateContextEndpoint,
   getUploadFileEndpoint,
   getVerificationStatusEndpoint,
+  getValidateBvnEndpoint,
+  getSubmitLivenessResultEndpoint,
 } from '../../contexts/configuration/getters';
 import { AnyRecord } from '../../../types';
 
@@ -162,4 +164,110 @@ export const verifyDocuments = async (data: IStoreData): Promise<string> => {
   localStorage.setItem('verificationId', results[0].ballerineFileId);
 
   return results[0].ballerineFileId;
+};
+
+export interface BvnValidationRequest {
+  bvn: string;
+}
+
+export interface BvnValidationResponse {
+  isValid: boolean;
+  message?: string;
+  customerInfo?: {
+    firstName?: string;
+    lastName?: string;
+    dateOfBirth?: string;
+  };
+}
+
+export const validateBvn = async (bvn: string): Promise<BvnValidationResponse> => {
+  // Development mock to avoid CORS issues
+  if (import.meta.env.DEV) {
+    console.log('MOCK BVN validation for:', bvn);
+    // Simulate API delay
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Mock validation logic
+    if (bvn.length === 11 && /^\d+$/.test(bvn)) {
+      return {
+        isValid: true,
+        customerInfo: {
+          firstName: 'John',
+          lastName: 'Doe',
+          dateOfBirth: '1990-01-01',
+        },
+      };
+    } else {
+      return {
+        isValid: false,
+        message: 'Invalid BVN number. Please enter a valid 11-digit BVN.',
+      };
+    }
+  }
+
+  const endpointUrl = getValidateBvnEndpoint();
+  return await httpPatch<BvnValidationResponse>(endpointUrl, { bvn });
+};
+
+export interface ChallengeResult {
+  challengeId: string;
+  completed: boolean;
+  quality: number;
+  padScore: number;
+  duration: number;
+  snapshot: string;
+}
+
+export interface LivenessMetadata {
+  userAgent: string;
+  timestamp: number;
+  challengeDuration: number;
+  retryCount: number;
+  sessionId?: string;
+}
+
+export interface LivenessResultRequest {
+  sessionId: string;
+  bvn: string;
+  livenessScore: number;
+  challenges: ChallengeResult[];
+  metadata: LivenessMetadata;
+  verificationId?: string;
+  // Legacy support
+  snapshots?: string[];
+  faceLandmarks?: any[];
+}
+
+export interface LivenessResultResponse {
+  success: boolean;
+  verificationId: string;
+  sessionId?: string;
+  confidence?: number;
+  riskScore?: number;
+  recommendations?: string[];
+  message?: string;
+}
+
+export const submitLivenessResult = async (
+  data: LivenessResultRequest,
+): Promise<LivenessResultResponse> => {
+  // Development mock to avoid CORS issues
+  if (import.meta.env.DEV) {
+    console.log('MOCK liveness result submission:', data);
+    // Simulate API delay
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // Mock response
+    return {
+      success: true,
+      verificationId: `mock_verification_${Date.now()}`,
+      sessionId: data.sessionId,
+      confidence: data.livenessScore > 80 ? 0.95 : 0.75,
+      riskScore: data.livenessScore > 80 ? 0.05 : 0.25,
+      recommendations: data.livenessScore > 80 ? [] : ['Consider improving lighting conditions'],
+    };
+  }
+
+  const endpointUrl = getSubmitLivenessResultEndpoint();
+  return await httpPatch<LivenessResultResponse>(endpointUrl, data);
 };

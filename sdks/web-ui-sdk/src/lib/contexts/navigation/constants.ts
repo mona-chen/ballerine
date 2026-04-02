@@ -10,6 +10,8 @@ import {
   SelfieStart,
   Selfie,
   CheckSelfie,
+  BvnCollection,
+  LivenessCheck,
   Final,
   DocumentPhotoBackStart,
   Loading,
@@ -42,6 +44,8 @@ export const steps = [
   { name: Steps.SelfieStart, component: SelfieStart },
   { name: Steps.Selfie, component: Selfie },
   { name: Steps.CheckSelfie, component: CheckSelfie },
+  { name: Steps.BvnCollection, component: BvnCollection },
+  { name: Steps.LivenessCheck, component: LivenessCheck },
   { name: Steps.Loading, component: Loading },
   {
     name: Steps.Resubmission,

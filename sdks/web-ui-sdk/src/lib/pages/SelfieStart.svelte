@@ -95,7 +95,7 @@
             on:change={handler}
           />
         {/if}
-        <NextStepButton configuration={element.props} disabled={$isDisabled}>
+        <NextStepButton configuration={element.props} isDisabled={$isDisabled} skipType={undefined}>
           <T key="button" namespace={stepNamespace} />
         </NextStepButton>
       </div>
