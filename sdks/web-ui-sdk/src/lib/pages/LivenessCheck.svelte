@@ -19,6 +19,8 @@
     analyzeCameraMotion,
     startMotionTracking,
     computePassiveScore,
+    detectPhotoOfPhoto,
+    computePrintSpoofScore,
     cropFaceFromCanvas,
     captureVideoFrame,
     type LivenessSignals,
@@ -200,6 +202,11 @@
     const moireScore = faceImageData ? detectMoire(faceImageData) : 50;
     const rgbScore = faceImageData ? analyzeRGBChannels(faceImageData) : 50;
     const reflectionScore = faceImageData ? analyzeReflection(faceImageData) : 50;
+
+    // Print-spoof detection for photo-of-photo attacks
+    const printSpoofSignals = faceImageData ? detectPhotoOfPhoto(faceImageData) : null;
+    const printSpoofScore = printSpoofSignals ? computePrintSpoofScore(printSpoofSignals) : 50;
+
     const temporal = analyzeTemporalMotion(landmarkHistory);
 
     let motionScore: number;
@@ -219,14 +226,24 @@
       rgbScore,
       reflectionScore,
       motionScore,
+      printSpoofScore,
     );
 
     const adjustedOverall = Math.min(100, passiveSignals.overall * 0.85 + temporal.score * 0.15);
 
-    if (adjustedOverall >= 85) {
+    // TIGHTENED: Require higher confidence for immediate pass
+    // Auto-pass requires: overall >= 88 AND no critical failures
+    const hasCriticalFailure =
+      moireScore < 20 ||
+      reflectionScore < 15 ||
+      (printSpoofScore < 25) ||
+      (moireScore < 35 && reflectionScore < 25);
+
+    if (adjustedOverall >= 88 && !hasCriticalFailure) {
       livenessScore = Math.round(adjustedOverall);
       await submitResult();
-    } else if (adjustedOverall >= 55) {
+    } else if (adjustedOverall >= 60) {
+      // Challenge phase for borderline cases
       livenessScore = Math.round(adjustedOverall);
       startChallenge();
     } else {
@@ -356,9 +373,11 @@
               rgb: passiveSignals.rgbScore,
               reflection: passiveSignals.reflectionScore,
               motion: passiveSignals.motionScore,
+              printSpoof: passiveSignals.printSpoofScore,
               reasons: passiveSignals.reasons,
             }
           : null,
+        printSpoofSignals: printSpoofSignals || null,
       },
     };
 
