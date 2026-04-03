@@ -65,6 +65,7 @@
 
   // Passive analysis results
   let passiveSignals: LivenessSignals | null = null;
+  let printSpoofSignals: import('../utils/liveness-analysis').PrintSpoofSignals | null = null;
 
   // Challenge state
   const CHALLENGES = [
@@ -204,7 +205,7 @@
     const reflectionScore = faceImageData ? analyzeReflection(faceImageData) : 50;
 
     // Print-spoof detection for photo-of-photo attacks
-    const printSpoofSignals = faceImageData ? detectPhotoOfPhoto(faceImageData) : null;
+    printSpoofSignals = faceImageData ? detectPhotoOfPhoto(faceImageData) : null;
     const printSpoofScore = printSpoofSignals ? computePrintSpoofScore(printSpoofSignals) : 50;
 
     const temporal = analyzeTemporalMotion(landmarkHistory);
@@ -415,6 +416,7 @@
     phase = 'selfie_capture';
     landmarkHistory = [];
     passiveSignals = null;
+    printSpoofSignals = null;
     currentChallenge = null;
     snapshotBase64 = null;
     autoCaptureFrames = 0;
