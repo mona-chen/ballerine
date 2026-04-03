@@ -20,6 +20,7 @@ export const getFlowOrders = (configuration: IAppConfiguration) => {
   }
   const flowConfiguration = configuration.flows[flowName];
   if (!flowConfiguration || !flowConfiguration.steps) {
+    console.error(`[getFlowOrders] Flow config not found for: ${flowName}`);
     return new Error(`Flow configuration doesn't exist for the name: ${flowName}`);
   }
   return flowConfiguration.steps.map(s => s.id);

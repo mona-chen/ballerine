@@ -46,6 +46,28 @@ const httpPost = async <TResponse>(url: string, body: FormData) => {
   return (await response.json()) as Promise<TResponse>;
 };
 
+const httpPostJson = async <TResponse>(url: string, body: AnyRecord) => {
+  const init = {
+    method: 'POST',
+    headers: {
+      Authorization: getAuthorizationHeader(),
+      'Content-Type': 'application/json',
+      ...staticHeaders,
+    },
+    body: JSON.stringify(body),
+  };
+
+  const response = await fetch(url, init);
+
+  if (!response.ok) {
+    throw new Error(
+      `Error posting ${url}. http code: ${response.status}, ${response.statusText}.`,
+    );
+  }
+
+  return (await response.json()) as Promise<TResponse>;
+};
+
 const httpPatch = async <TResponse>(url: string, body: AnyRecord) => {
   const init = {
     method: 'PATCH',
@@ -132,12 +154,12 @@ const createDocument = (
   pages,
 });
 
-const updateContext = async (context: Record<string, unknown>) => {
+export const updateContext = async (context: Record<string, unknown>) => {
   return await httpPatch(updateContextEndpoint, { context });
 };
 
 export const verifyDocuments = async (data: IStoreData): Promise<string> => {
-  if (data.selfie) {
+  if (data.selfie && data.docs.length > 0) {
     data.docs[0].pages.push({
       side: 'selfie',
       base64: data.selfie,
@@ -159,7 +181,16 @@ export const verifyDocuments = async (data: IStoreData): Promise<string> => {
 
   const documents = data.docs.map(doc => createDocument(doc, results));
 
-  await updateContext({ documents });
+  const contextPayload: Record<string, unknown> = { documents };
+  if (data.liveness) {
+    contextPayload.liveness = data.liveness;
+  }
+
+  await updateContext(contextPayload);
+
+  if (results.length === 0) {
+    return 'no-documents';
+  }
 
   localStorage.setItem('verificationId', results[0].ballerineFileId);
 
@@ -227,11 +258,14 @@ export interface LivenessMetadata {
 }
 
 export interface LivenessResultRequest {
-  sessionId: string;
-  bvn: string;
-  livenessScore: number;
-  challenges: ChallengeResult[];
-  metadata: LivenessMetadata;
+  sessionId?: string;
+  session_id?: string;
+  bvn?: string;
+  livenessScore?: number;
+  score?: number;
+  provider?: string;
+  challenges?: ChallengeResult[];
+  metadata?: LivenessMetadata | Record<string, any>;
   verificationId?: string;
   // Legacy support
   snapshots?: string[];
@@ -251,23 +285,6 @@ export interface LivenessResultResponse {
 export const submitLivenessResult = async (
   data: LivenessResultRequest,
 ): Promise<LivenessResultResponse> => {
-  // Development mock to avoid CORS issues
-  if (import.meta.env.DEV) {
-    console.log('MOCK liveness result submission:', data);
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // Mock response
-    return {
-      success: true,
-      verificationId: `mock_verification_${Date.now()}`,
-      sessionId: data.sessionId,
-      confidence: data.livenessScore > 80 ? 0.95 : 0.75,
-      riskScore: data.livenessScore > 80 ? 0.05 : 0.25,
-      recommendations: data.livenessScore > 80 ? [] : ['Consider improving lighting conditions'],
-    };
-  }
-
   const endpointUrl = getSubmitLivenessResultEndpoint();
-  return await httpPatch<LivenessResultResponse>(endpointUrl, data);
+  return await httpPostJson<LivenessResultResponse>(endpointUrl, data);
 };

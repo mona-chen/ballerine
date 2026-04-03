@@ -697,13 +697,25 @@ const stepsTheme: TStepsConfigurations = [
         id: 'title',
         orderIndex: 30,
         type: Elements.Title,
-        props: {},
+        props: {
+          style: {
+            'font-size': '20px',
+            'font-weight': 600,
+            'letter-spacing': '-0.02em',
+          },
+        },
       },
       {
         id: 'description',
         orderIndex: 40,
         type: Elements.Paragraph,
-        props: {},
+        props: {
+          style: {
+            'font-size': '14px',
+            'line-height': 1.5,
+            color: '#64748b',
+          },
+        },
       },
       {
         id: 'button',
@@ -712,6 +724,7 @@ const stepsTheme: TStepsConfigurations = [
         props: {
           style: {
             margin: 'auto 0 0 0',
+            background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)',
           },
         },
       },
@@ -757,6 +770,23 @@ const stepsTheme: TStepsConfigurations = [
     ],
   },
   {
+    name: Steps.LivenessStart,
+    id: Steps.LivenessStart,
+    namespace: Steps.LivenessStart,
+    elements: [
+      {
+        id: 'button',
+        orderIndex: 60,
+        type: Elements.Button,
+        props: {
+          style: {
+            background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)',
+          },
+        },
+      },
+    ],
+  },
+  {
     name: Steps.LivenessCheck,
     id: Steps.LivenessCheck,
     namespace: Steps.LivenessCheck,
@@ -797,15 +827,15 @@ export const uiTheme: IUIPackTheme & Pick<IAppConfigurationUI, 'settings'> = {
     borderRadius: '16px',
     padding: '24px',
     colors: {
-      primary: '#007AFF',
-      secondary: '#080444',
-      text: '#788597',
-      danger: 'rgba(173, 0, 0, 0.8);',
+      primary: '#14b8a6',
+      secondary: '#0f766e',
+      text: '#334155',
+      danger: 'rgba(239, 68, 68, 0.9)',
     },
     fonts: {
       name: 'Inter',
       weight: [400, 500, 600, 700],
-      link: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700',
+      link: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
     },
   },
   components: {
@@ -813,7 +843,10 @@ export const uiTheme: IUIPackTheme & Pick<IAppConfigurationUI, 'settings'> = {
     paragraph: {
       'font-size': '14px',
       'text-align': 'center',
-      color: '#788597',
+      color: '#64748b',
+      'line-height': 1.5,
+      'font-family': 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
+      'letter-spacing': '-0.01em',
     },
     cameraButton: {
       margin: '24px 0px 30px',
@@ -822,13 +855,15 @@ export const uiTheme: IUIPackTheme & Pick<IAppConfigurationUI, 'settings'> = {
     input: {},
     loader: {},
     button: {
-      'font-size': '16px',
-      padding: '20px 20px',
+      'font-size': '15px',
+      padding: '16px 20px',
       width: '100%',
       color: '#fff',
-      'font-weight': 700,
+      'font-weight': 600,
       'border-radius': '12px',
-      'box-shadow': '0px 6px 9px 5px #007AFF1a;-webkit-box-shadow: 0px 6px 9px 5px #007AFF1a;',
+      'box-shadow': '0px 6px 9px 5px rgba(20, 184, 166, 0.1);-webkit-box-shadow: 0px 6px 9px 5px rgba(20, 184, 166, 0.1);',
+      'font-family': 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
+      'letter-spacing': '-0.01em',
     },
     buttonWithIcon: {
       'font-size': '16px',
@@ -899,7 +934,7 @@ export const uiTheme: IUIPackTheme & Pick<IAppConfigurationUI, 'settings'> = {
     layout: {
       padding: '40px',
       position: 'relative',
-      background: 'linear-gradient(180deg, #fff 0%, #fff 75%, #007AFF 250%)',
+      background: '#ffffff',
     },
     documentOptions: {
       options: {
@@ -1041,11 +1076,13 @@ export const uiTheme: IUIPackTheme & Pick<IAppConfigurationUI, 'settings'> = {
       'justify-content': 'center',
     },
     title: {
-      'font-weight': 700,
-      'font-size': '18px',
+      'font-weight': 600,
+      'font-size': '20px',
       'text-align': 'center',
-      padding: '10px 0px 24px',
-      color: '#001B39',
+      padding: '8px 0px 16px',
+      color: '#0f172a',
+      'letter-spacing': '-0.02em',
+      'font-family': 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
     },
   },
   settings: {

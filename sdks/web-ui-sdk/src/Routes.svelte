@@ -15,10 +15,15 @@
 
   const flowSteps = getFlowSteps();
   const configurationStepIds = flowSteps.map(s => s.id) as string[];
-  let stepId = configurationStepIds[0];
-  const flowStep = flowSteps.find(s => s.id === stepId) as IStepConfiguration;
+  let stepId = configurationStepIds[0] || '';
+  const initialFlowStep = flowSteps.find(s => s.id === stepId) as IStepConfiguration;
 
-  let step = steps.find(s => s.name === flowStep.name);
+  let step = initialFlowStep ? steps.find(s => s.name === initialFlowStep.name) : undefined;
+
+  // Initialize currentStepId to the first step of the flow if it's not set or is 'welcome'
+  if ($currentStepId === 'welcome' || !configurationStepIds.includes($currentStepId)) {
+    currentStepId.set(stepId);
+  }
 
   const routeInit = (currentStepId: string, currentStepIdx: number) => {
     const flowSteps = getFlowSteps();
@@ -29,24 +34,22 @@
       return;
     }
 
-    if (!configurationStepId) {
-      stepId = currentStepId;
+    const targetStepId = configurationStepId || (flowSteps[0]?.id as string);
+    stepId = targetStepId;
 
-      const flowStep = flowSteps.find(s => s.id === currentStepId) as IStepConfiguration;
+    const flowStep = flowSteps.find(s => s.id === targetStepId) as IStepConfiguration;
+    if (flowStep) {
       step = steps.find(s => s.name === flowStep.name);
-    } else {
-      stepId = configurationStepId;
+    }
 
-      const flowStep = flowSteps.find(s => s.id === currentStepId) as IStepConfiguration;
-      step = steps.find(s => s.name === flowStep.name);
-
+    if (configurationStepId) {
       const newStepIndex = configurationStepIds.indexOf(stepId);
 
       if (newStepIndex !== currentStepIdx) {
         currentStepIdx = newStepIndex;
 
         sendNavigationUpdateEvent();
-        visitedPage(currentStepId, $currentParams ? $currentParams.toString() : '');
+        visitedPage(targetStepId, $currentParams ? $currentParams.toString() : '');
       } else {
         // 404 error handling here
       }

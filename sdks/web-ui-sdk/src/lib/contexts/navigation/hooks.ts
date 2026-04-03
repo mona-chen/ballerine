@@ -24,8 +24,16 @@ export const getNextStepId = (
   skipType?: string,
 ) => {
   const stepsOrder = getFlowOrders(globalConfiguration) as string[];
+  if (stepsOrder instanceof Error) {
+    console.error('[getNextStepId] Error getting flow orders:', stepsOrder.message);
+    return;
+  }
   const filteredFlows = filterOutByType(stepsOrder, globalConfiguration, skipType);
   const currentFlowIndex = filteredFlows.findIndex(i => i === currentStepId);
+  if (currentFlowIndex === -1) {
+    console.error(`[getNextStepId] Current step "${currentStepId}" not found in flow`);
+    return;
+  }
   if (currentFlowIndex === filteredFlows.length - 1) {
     // end of the flow
     void verifyDocumentsAndCloseFlow(globalConfiguration).catch((err: Error) =>
@@ -44,7 +52,9 @@ export const goToNextStep = (
   skipType?: string,
 ) => {
   const nextStepId = getNextStepId(globalConfiguration, currentStepId, skipType);
-  if (nextStepId) currentStepIdStore.set(nextStepId);
+  if (nextStepId) {
+    currentStepIdStore.set(nextStepId);
+  }
 };
 
 export const goToPrevStep = (

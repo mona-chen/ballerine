@@ -24,10 +24,7 @@
   let validationError = '';
   let bvnValidated = false;
 
-  $: isValid = (() => {
-    const cleanBvn = bvnInputValue.replace(/\D/g, '');
-    return cleanBvn.length === 11;
-  })();
+  $: isValid = bvnInputValue.replace(/\D/g, '').length === 11;
   $: inputStyle = isValid
     ? { border: '2px solid #28a745' }
     : bvnInputValue.length > 0 && !isValid
@@ -117,12 +114,13 @@
               style: inputStyle,
               attributes: {
                 ...element.props.attributes,
-                placeholder: 'Enter 11-digit BVN',
+                placeholder: 'placeholder',
                 type: 'text',
                 maxlength: 15, // Allow for dashes
                 validate: () => validateBVN(bvnInputValue),
               },
             }}
+            translationContext={stepNamespace}
             bind:value={bvnInputValue}
             on:focus={() => (isFocused = true)}
             on:blur={() => (isFocused = false)}
@@ -149,7 +147,7 @@
             </div>
           {/if}
         </div>
-        {#if bvnValue.length > 0 && !isValid}
+        {#if bvnInputValue.length > 0 && !isValid}
           <div class="error-message">Please enter a valid 11-digit BVN number</div>
         {/if}
       </div>
@@ -161,6 +159,7 @@
             configuration={element.props}
             isDisabled={!isValid || isValidating}
             skipType={undefined}
+            advanceOnClick={false}
             on:click={handleBvnValidation}
           >
             {#if isValidating}

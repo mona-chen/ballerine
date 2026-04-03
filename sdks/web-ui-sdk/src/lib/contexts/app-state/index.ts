@@ -7,6 +7,7 @@ export {
   currentStepId,
   currentParams,
   bvnValue,
+  livenessResult,
 } from './stores';
 export type {
   IAppState,

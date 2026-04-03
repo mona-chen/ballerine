@@ -28,6 +28,7 @@ export const Steps = {
   A4DocumentPhoto: 'a4-document-photo',
   CheckA4Document: 'check-a4-document',
   BvnCollection: 'bvn-collection',
+  LivenessStart: 'liveness-start',
   LivenessCheck: 'liveness-check',
   Registration: 'registration',
   Final: 'final',

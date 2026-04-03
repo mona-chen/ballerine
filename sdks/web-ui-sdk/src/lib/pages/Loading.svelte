@@ -9,6 +9,7 @@
     documents,
     ISelectedParams,
     IStoreData,
+    livenessResult,
     selectedDocumentInfo,
     selfieUri,
   } from '../contexts/app-state';
@@ -109,6 +110,7 @@
       docs: $documents,
       selectedDocumentInfo: $selectedDocumentInfo,
       selfie: $selfieUri,
+      liveness: $livenessResult,
     };
 
     makeRequest(data);

@@ -1,15 +1,31 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { NextStepButton, Paragraph, Title, VideoContainer } from '../atoms';
-  import { configuration } from '../contexts/configuration';
+  import { configuration, IAppConfiguration } from '../contexts/configuration';
   import { Elements } from '../contexts/configuration/types';
   import { T } from '../contexts/translation';
   import { getLayoutStyles, getStepConfiguration } from '../ui-packs';
   import { getFlowConfig } from '../contexts/flows/hooks';
-  import { bvnValue } from '../contexts/app-state/stores';
+  import { livenessResult, currentStepId } from '../contexts/app-state/stores';
   import { submitLivenessResult } from '../services/http';
+  import { goToNextStep } from '../contexts/navigation';
+  import {
+    analyzeDepth,
+    analyzeTexture,
+    detectMoire,
+    analyzeRGBChannels,
+    analyzeReflection,
+    analyzeTemporalMotion,
+    analyzeCameraMotion,
+    startMotionTracking,
+    computePassiveScore,
+    cropFaceFromCanvas,
+    captureVideoFrame,
+    type LivenessSignals,
+    type MotionTelemetry,
+  } from '../utils/liveness-analysis';
 
-  export let stepId;
+  export let stepId: string;
 
   const step = getStepConfiguration($configuration, stepId);
   const flow = getFlowConfig($configuration);
@@ -17,246 +33,88 @@
 
   const stepNamespace = step.namespace || 'liveness-check';
 
+  // ─────────────────────────────────────────────────────────────
+  // State Machine
+  // ─────────────────────────────────────────────────────────────
+  type Phase = 'camera_setup' | 'selfie_capture' | 'analyzing' | 'challenge' | 'submitting' | 'completed' | 'failed';
+  let phase: Phase = 'camera_setup';
+
   let videoElement: HTMLVideoElement;
-  let canvasElement: HTMLCanvasElement;
-  let isInitialized = false;
-  let isChecking = false;
-  let livenessScore = 0;
-  let statusMessage = 'Initializing camera...';
-  let isSubmitting = false;
-
-  // Enhanced liveness configuration - realistic durations
-  const AVAILABLE_CHALLENGES = [
-    { id: 'smile', name: 'smile', duration: 5, difficulty: 'easy' }, // Quick but clear
-    { id: 'blink', name: 'blink', duration: 3, difficulty: 'easy' }, // Natural blink duration
-    { id: 'turn_left', name: 'turn left', duration: 10, difficulty: 'medium' }, // Requires deliberate turn
-    { id: 'turn_right', name: 'turn right', duration: 10, difficulty: 'medium' }, // Requires deliberate turn
-    { id: 'nod', name: 'nod', duration: 8, difficulty: 'medium' }, // Natural head movement
-    { id: 'look_up', name: 'look up', duration: 6, difficulty: 'hard' }, // Clear upward movement
-  ];
-
-  // Randomized challenge sequence
-  let challenges: typeof AVAILABLE_CHALLENGES = [];
-  let currentStepIndex = 0;
-  let stepCompleted: boolean[] = [];
-  let snapshots: string[] = [];
-  let stepTimers: number[] = [];
-  let qualityScores: number[] = [];
-  let padScores: number[] = []; // Presentation Attack Detection scores
-  let actionConsistency: number[] = []; // Tracks how many consecutive frames action is detected
-  let previousNoseY: number | null = null; // Track previous nose position for nod detection
-  let centerNoseX: number = 0.5; // Baseline nose position when facing forward
-
-  // Retry mechanism
-  let retryCount = 0;
-  const MAX_RETRIES = 3;
-  let failedAttempts: number[] = [];
-
-  // Session management
-  let sessionId: string;
-  let challengeStartTime: number;
-
-  // Initialize randomized challenges
-  function initializeChallenges() {
-    const shuffled = [...AVAILABLE_CHALLENGES].sort(() => Math.random() - 0.5);
-    const selectedCount = Math.min(3 + Math.floor(Math.random() * 2), shuffled.length); // 3-4 challenges
-    challenges = shuffled.slice(0, selectedCount);
-
-    stepCompleted = new Array(challenges.length).fill(false);
-    stepTimers = new Array(challenges.length).fill(0);
-    qualityScores = new Array(challenges.length).fill(0);
-    padScores = new Array(challenges.length).fill(0);
-    actionConsistency = new Array(challenges.length).fill(0);
-    currentStepIndex = 0;
-
-    // Generate secure session ID with current BVN
-    const currentBvn = $bvnValue || '';
-    sessionId = generateSessionId(currentBvn);
-    challengeStartTime = Date.now();
-
-    console.log(
-      'Initialized challenges:',
-      challenges.map(c => c.id),
-    );
-  }
-
-  // Security and quality utilities
-  function generateSessionId(bvn?: string): string {
-    const timestamp = Date.now().toString(36);
-    const randomPart = Math.random().toString(36).substring(2, 15);
-    const bvnHash = bvn ? btoa(bvn).substring(0, 8) : 'unknown';
-    return `session_${timestamp}_${randomPart}_${bvnHash}`;
-  }
-
-  // MediaPipe Face Mesh
+  let analysisCanvas: HTMLCanvasElement;
   let faceMesh: any = null;
 
-  // Position tracking for face in oval
+  let livenessScore = 0;
+  let isSubmitting = false;
+  let sessionId: string;
+
+  // MediaPipe results
+  let latestLandmarks: any[] | null = null;
+  let landmarkHistory: any[][][] = [];
   let positionScore = 0;
 
-  // Previous landmarks for motion analysis
-  let previousLandmarks: any = null;
-  let motionHistory: number[] = [];
+  // Motion telemetry
+  let motionTelemetry: MotionTelemetry = {
+    hasMotion: false,
+    accelerationVariance: 0,
+    rotationVariance: 0,
+    sampleCount: 0,
+  };
+  let stopMotionTracking: (() => void) | null = null;
 
-  // Image quality assessment
-  function assessImageQuality(landmarks: any, imageData?: ImageData): number {
-    let qualityScore = 0;
-    const weights = {
-      position: 0.3,
-      size: 0.2,
-      sharpness: 0.2,
-      lighting: 0.3,
-    };
+  // Passive analysis results
+  let passiveSignals: LivenessSignals | null = null;
 
-    // Position score (already calculated)
-    const posScore = calculatePositionScore(landmarks);
-    qualityScore += posScore * weights.position;
+  // Challenge state
+  const CHALLENGES = [
+    { id: 'turn_left', name: 'Turn your head slightly left', durationFrames: 20 },
+    { id: 'turn_right', name: 'Turn your head slightly right', durationFrames: 20 },
+    { id: 'blink', name: 'Blink naturally', durationFrames: 12 },
+  ];
+  let currentChallenge: typeof CHALLENGES[0] | null = null;
+  let challengeProgress = 0;
+  let challengeDetectedFrames = 0;
+  let challengeCalibrated = false;
+  let centerNoseX = 0.5;
+  let eyeOpenBaseline = 0;
 
-    // Size score - face should occupy good portion of frame
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    landmarks.forEach((lm: any) => {
-      minX = Math.min(minX, lm.x);
-      maxX = Math.max(maxX, lm.x);
-      minY = Math.min(minY, lm.y);
-      maxY = Math.max(maxY, lm.y);
+  // Verification snapshot captured during selfie phase
+  let snapshotBase64: string | null = null;
+
+  // Auto-capture countdown
+  let autoCaptureFrames = 0;
+  const AUTO_CAPTURE_REQUIRED_FRAMES = 20; // ~1 second at 30fps
+
+  // ─────────────────────────────────────────────────────────────
+  // Session Management
+  // ─────────────────────────────────────────────────────────────
+  function generateSessionId(): string {
+    const timestamp = Date.now().toString(36);
+    const randomPart = Math.random().toString(36).substring(2, 15);
+    return `liveness_${timestamp}_${randomPart}`;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Camera + MediaPipe Setup
+  // ─────────────────────────────────────────────────────────────
+  onMount(async () => {
+    // Priority: URL param sessionId > endUserInfo.id > generated
+    sessionId = $configuration.endUserInfo?.sessionId ||
+                $configuration.endUserInfo?.id ||
+                generateSessionId();
+
+    console.log('[LivenessCheck] Session ID:', sessionId);
+    console.log('[LivenessCheck] Redirect URL:', $configuration.endUserInfo?.redirectUrl);
+
+    stopMotionTracking = startMotionTracking((telemetry) => {
+      motionTelemetry = telemetry;
     });
 
-    const faceWidth = maxX - minX;
-    const faceHeight = maxY - minY;
-    const faceArea = faceWidth * faceHeight;
-    const idealSize = 0.15; // Ideal face area as fraction of frame
-    const sizeScore = Math.max(0, 100 - Math.abs(faceArea - idealSize) * 500);
-    qualityScore += Math.min(sizeScore, 100) * weights.size;
-
-    // Lighting estimation (simplified - based on face landmark visibility)
-    const visibleLandmarks = landmarks.filter((lm: any) => lm.visibility > 0.8).length;
-    const lightingScore = (visibleLandmarks / landmarks.length) * 100;
-    qualityScore += lightingScore * weights.lighting;
-
-    // Sharpness estimation (simplified - would need actual image analysis)
-    // For now, use landmark consistency
-    let sharpnessScore = 100;
-    if (previousLandmarks) {
-      const movement = calculateMovement(previousLandmarks, landmarks);
-      sharpnessScore = Math.max(0, 100 - movement * 1000); // Less stable = potentially blurry
-    }
-    qualityScore += Math.max(sharpnessScore, 50) * weights.sharpness;
-
-    previousLandmarks = JSON.parse(JSON.stringify(landmarks));
-    return Math.min(qualityScore, 100);
-  }
-
-  // Basic Presentation Attack Detection
-  function detectPresentationAttack(landmarks: any, currentChallenge: string): number {
-    let padScore = 100; // Start with assuming real
-    const suspiciousPatterns = [];
-
-    // Check for unnatural movement patterns (much less sensitive)
-    if (motionHistory.length > 20) {
-      // Increased from 10
-      const avgMotion = motionHistory.reduce((a, b) => a + b, 0) / motionHistory.length;
-      const motionVariance =
-        motionHistory.reduce((sum, motion) => sum + Math.pow(motion - avgMotion, 2), 0) /
-        motionHistory.length;
-
-      // Much more lenient thresholds - only flag extremely suspicious behavior
-      if (avgMotion < 0.0001) {
-        // Reduced from 0.001
-        suspiciousPatterns.push('minimal_movement');
-        padScore -= 5; // Reduced from 20
-      }
-      if (motionVariance > 0.05) {
-        // Increased from 0.01
-        suspiciousPatterns.push('erratic_movement');
-        padScore -= 5; // Reduced from 15
-      }
-    }
-
-    // Challenge-specific PAD checks
-    switch (currentChallenge) {
-      case 'smile':
-        // Check if smile appears too suddenly or mechanically
-        const smileScore = detectSmile(landmarks);
-        if (smileScore > 0.9 && motionHistory.length < 5) {
-          suspiciousPatterns.push('instant_smile');
-          padScore -= 25;
-        }
-        break;
-
-      case 'blink':
-        // Natural blinks should be quick but not instant
-        const blinkScore = detectBlink(landmarks);
-        if (blinkScore && motionHistory[motionHistory.length - 1] < 0.002) {
-          suspiciousPatterns.push('unnatural_blink');
-          padScore -= 20;
-        }
-        break;
-    }
-
-    // Face 3D depth consistency check (simplified)
-    const depthScore = checkFaceDepthConsistency(landmarks);
-    padScore -= (100 - depthScore) * 0.3;
-
-    // Only log if there are significant issues (reduced console spam)
-    if (suspiciousPatterns.length > 0 && padScore < 80) {
-      console.warn('Suspicious patterns detected:', suspiciousPatterns);
-    }
-
-    return Math.max(padScore, 0);
-  }
-
-  function calculateMovement(landmarks1: any, landmarks2: any): number {
-    if (!landmarks1 || !landmarks2) return 0;
-
-    let totalMovement = 0;
-    for (let i = 0; i < Math.min(landmarks1.length, landmarks2.length); i++) {
-      const dx = landmarks2[i].x - landmarks1[i].x;
-      const dy = landmarks2[i].y - landmarks1[i].y;
-      totalMovement += Math.sqrt(dx * dx + dy * dy);
-    }
-    return totalMovement / landmarks1.length;
-  }
-
-  function checkFaceDepthConsistency(landmarks: any): number {
-    // Simplified depth check using z-coordinates from MediaPipe
-    const zValues = landmarks.map((lm: any) => lm.z || 0);
-    const zVariance =
-      zValues.reduce(
-        (sum: number, z: number) =>
-          sum + Math.pow(z - zValues.reduce((a, b) => a + b, 0) / zValues.length, 2),
-        0,
-      ) / zValues.length;
-
-    // Natural faces should have some depth variation
-    if (zVariance < 0.0001) return 50; // Too flat - possible photo
-    if (zVariance > 0.1) return 30; // Too much variance - possible digital manipulation
-
-    return Math.max(0, 100 - zVariance * 500);
-  }
-
-  // Enhanced oval ring progress based on completion
-  $: overallProgress =
-    challenges.length > 0 ? stepCompleted.filter(Boolean).length / challenges.length : 0;
-  $: progress = Math.max(positionScore / 100, overallProgress * 0.7); // Mix position and completion
-  $: strokeColor = progress > 0.7 ? '#00ff00' : progress > 0.3 ? '#ffff00' : '#ff0000';
-  $: dashOffset = 1138 * (1 - progress);
-  const perimeter = 1138; // Approximate for rx=192 ry=144
-
-  // Initialize challenges and set up logging
-  onMount(async () => {
-    initializeChallenges();
-    console.log('Liveness check initialized with', challenges.length, 'challenges');
-
     try {
-      // Load MediaPipe Face Mesh
       const { FaceMesh } = await import('@mediapipe/face_mesh');
       const { Camera } = await import('@mediapipe/camera_utils');
 
       faceMesh = new FaceMesh({
-        locateFile: file => {
+        locateFile: (file) => {
           return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
         },
       });
@@ -264,13 +122,39 @@
       faceMesh.setOptions({
         maxNumFaces: 1,
         refineLandmarks: true,
-        minDetectionConfidence: 0.6, // Increased for better quality
-        minTrackingConfidence: 0.6,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
       });
 
-      faceMesh.onResults(onResults);
+      faceMesh.onResults((results) => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          latestLandmarks = results.multiFaceLandmarks[0];
+          landmarkHistory.push(results.multiFaceLandmarks);
+          if (landmarkHistory.length > 45) landmarkHistory.shift();
+          positionScore = calculatePositionScore(latestLandmarks);
 
-      // Initialize camera
+          if (phase === 'selfie_capture') {
+            if (positionScore >= 0.72) {
+              autoCaptureFrames++;
+              if (autoCaptureFrames >= AUTO_CAPTURE_REQUIRED_FRAMES) {
+                autoCaptureFrames = 0;
+                captureAndAnalyze();
+              }
+            } else {
+              autoCaptureFrames = Math.max(0, autoCaptureFrames - 2);
+            }
+          }
+
+          if (phase === 'challenge' && currentChallenge) {
+            processChallengeFrame(latestLandmarks);
+          }
+        } else {
+          latestLandmarks = null;
+          positionScore = 0;
+          autoCaptureFrames = 0;
+        }
+      });
+
       const camera = new Camera(videoElement, {
         onFrame: async () => {
           await faceMesh.send({ image: videoElement });
@@ -279,22 +163,258 @@
         height: 480,
       });
 
-      camera.start();
-      isInitialized = true;
-      statusMessage = `Get ready! We'll ask you to perform ${challenges.length} actions.`;
+      await camera.start();
+      phase = 'selfie_capture';
     } catch (error) {
-      console.error('Failed to initialize liveness check:', error);
-      statusMessage = 'Failed to initialize camera. Please try again.';
-      // Retry logic would go here
+      console.error('Camera init failed:', error);
+      phase = 'failed';
     }
   });
 
-  function calculatePositionScore(landmarks: any) {
-    // Calculate face bounding box from landmarks
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
+  onDestroy(() => {
+    if (stopMotionTracking) stopMotionTracking();
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // Selfie Capture + Passive Analysis
+  // ─────────────────────────────────────────────────────────────
+  async function captureAndAnalyze() {
+    if (!latestLandmarks || !videoElement) return;
+
+    phase = 'analyzing';
+
+    let canvas: HTMLCanvasElement;
+    try {
+      canvas = captureVideoFrame(videoElement);
+      snapshotBase64 = canvas.toDataURL('image/jpeg', 0.92);
+    } catch (err) {
+      console.error('Video capture failed:', err);
+      phase = 'selfie_capture';
+      return;
+    }
+
+    const faceImageData = cropFaceFromCanvas(canvas, latestLandmarks, 0.12);
+
+    const depthScore = analyzeDepth(latestLandmarks);
+    const textureScore = faceImageData ? analyzeTexture(faceImageData) : 50;
+    const moireScore = faceImageData ? detectMoire(faceImageData) : 50;
+    const rgbScore = faceImageData ? analyzeRGBChannels(faceImageData) : 50;
+    const reflectionScore = faceImageData ? analyzeReflection(faceImageData) : 50;
+    const temporal = analyzeTemporalMotion(landmarkHistory);
+
+    let motionScore: number;
+    if (motionTelemetry.hasMotion) {
+      motionScore = 85;
+    } else if (motionTelemetry.sampleCount > 0) {
+      motionScore = 30;
+    } else {
+      const cameraMotion = analyzeCameraMotion(landmarkHistory);
+      motionScore = cameraMotion.score;
+    }
+
+    passiveSignals = computePassiveScore(
+      depthScore,
+      textureScore,
+      moireScore,
+      rgbScore,
+      reflectionScore,
+      motionScore,
+    );
+
+    const adjustedOverall = Math.min(100, passiveSignals.overall * 0.85 + temporal.score * 0.15);
+
+    if (adjustedOverall >= 85) {
+      livenessScore = Math.round(adjustedOverall);
+      await submitResult();
+    } else if (adjustedOverall >= 55) {
+      livenessScore = Math.round(adjustedOverall);
+      startChallenge();
+    } else {
+      livenessScore = Math.round(adjustedOverall);
+      phase = 'failed';
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Challenge Phase
+  // ─────────────────────────────────────────────────────────────
+  function startChallenge() {
+    currentChallenge = CHALLENGES[Math.floor(Math.random() * CHALLENGES.length)];
+    challengeProgress = 0;
+    challengeDetectedFrames = 0;
+    challengeCalibrated = false;
+    centerNoseX = 0.5;
+    eyeOpenBaseline = 0;
+    phase = 'challenge';
+  }
+
+  function processChallengeFrame(landmarks: any[]) {
+    if (!currentChallenge) return;
+
+    let detected = false;
+
+    switch (currentChallenge.id) {
+      case 'turn_left':
+        detected = detectTurnLeft(landmarks);
+        break;
+      case 'turn_right':
+        detected = detectTurnRight(landmarks);
+        break;
+      case 'blink':
+        detected = detectBlink(landmarks);
+        break;
+    }
+
+    if (detected) {
+      challengeDetectedFrames++;
+    } else {
+      challengeDetectedFrames = Math.max(0, challengeDetectedFrames - 1);
+    }
+
+    challengeProgress = Math.min(
+      100,
+      (challengeDetectedFrames / currentChallenge.durationFrames) * 100,
+    );
+
+    if (challengeDetectedFrames >= currentChallenge.durationFrames) {
+      livenessScore = Math.min(100, Math.round(livenessScore * 0.7 + 95 * 0.3));
+      phase = 'submitting';
+      submitResult();
+    }
+  }
+
+  function detectTurnLeft(landmarks: any[]): boolean {
+    const noseTip = landmarks[1];
+    if (!challengeCalibrated && Math.abs(noseTip.x - 0.5) < 0.1) {
+      centerNoseX = noseTip.x;
+      challengeCalibrated = true;
+    }
+    const deviation = centerNoseX - noseTip.x;
+    return deviation > 0.06;
+  }
+
+  function detectTurnRight(landmarks: any[]): boolean {
+    const noseTip = landmarks[1];
+    if (!challengeCalibrated && Math.abs(noseTip.x - 0.5) < 0.1) {
+      centerNoseX = noseTip.x;
+      challengeCalibrated = true;
+    }
+    const deviation = noseTip.x - centerNoseX;
+    return deviation > 0.06;
+  }
+
+  function detectBlink(landmarks: any[]): boolean {
+    const leftEAR = computeEAR(landmarks, [33, 160, 158, 133, 153, 144]);
+    const rightEAR = computeEAR(landmarks, [362, 385, 387, 263, 373, 380]);
+    const avgEAR = (leftEAR + rightEAR) / 2;
+
+    if (!challengeCalibrated) {
+      eyeOpenBaseline = avgEAR;
+      challengeCalibrated = true;
+      return false;
+    }
+
+    return avgEAR < eyeOpenBaseline * 0.55 && avgEAR < 0.3;
+  }
+
+  function computeEAR(landmarks: any[], indices: number[]): number {
+    const pts = indices.map((i) => landmarks[i]);
+    const vertical1 = distance(pts[1], pts[5]);
+    const vertical2 = distance(pts[2], pts[4]);
+    const horizontal = distance(pts[0], pts[3]);
+    return (vertical1 + vertical2) / (2 * horizontal + 1e-8);
+  }
+
+  function distance(a: any, b: any): number {
+    return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Result Submission
+  // ─────────────────────────────────────────────────────────────
+  async function submitResult() {
+    isSubmitting = true;
+    phase = 'submitting';
+
+    const payload: Record<string, unknown> = {
+      session_id: sessionId,
+      score: livenessScore,
+      provider: 'ballerine_hybrid_v1',
+      snapshot: snapshotBase64,
+      metadata: {
+        userAgent: navigator.userAgent,
+        timestamp: Date.now(),
+        motionTelemetry,
+        challengeId: currentChallenge?.id || null,
+        challengePassed: currentChallenge ? challengeProgress >= 100 : null,
+        passiveSignals: passiveSignals
+          ? {
+              overall: passiveSignals.overall,
+              depth: passiveSignals.depthScore,
+              texture: passiveSignals.textureScore,
+              moire: passiveSignals.moireScore,
+              rgb: passiveSignals.rgbScore,
+              reflection: passiveSignals.reflectionScore,
+              motion: passiveSignals.motionScore,
+              reasons: passiveSignals.reasons,
+            }
+          : null,
+      },
+    };
+
+    try {
+      const result = await submitLivenessResult(payload as any);
+      if (result.success) {
+        phase = 'completed';
+        livenessResult.set(payload as Record<string, unknown>);
+
+        // Check for redirect URL
+        const redirectUrl = $configuration.endUserInfo?.redirectUrl;
+        if (redirectUrl) {
+          // Redirect on success
+          setTimeout(() => {
+            window.location.href = redirectUrl;
+          }, 1500);
+        } else {
+          // Auto-advance to Final step after successful submission
+          setTimeout(() => {
+            goToNextStep(currentStepId, $configuration, stepId);
+          }, 800);
+        }
+      } else {
+        phase = 'failed';
+      }
+    } catch (err) {
+      console.error('Submission error:', err);
+      phase = 'failed';
+    } finally {
+      isSubmitting = false;
+    }
+  }
+
+  function retry() {
+    phase = 'selfie_capture';
+    landmarkHistory = [];
+    passiveSignals = null;
+    currentChallenge = null;
+    snapshotBase64 = null;
+    autoCaptureFrames = 0;
+    livenessResult.set(undefined);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Oval Progress Ring
+  // ─────────────────────────────────────────────────────────────
+  const perimeter = 1138;
+  $: ovalProgress = phase === 'challenge'
+    ? challengeProgress / 100
+    : phase === 'selfie_capture'
+      ? Math.min(positionScore / 100, 1)
+      : 0;
+  $: dashOffset = perimeter * (1 - ovalProgress);
+
+  function calculatePositionScore(landmarks: any[]): number {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     landmarks.forEach((lm: any) => {
       minX = Math.min(minX, lm.x);
       maxX = Math.max(maxX, lm.x);
@@ -307,537 +427,247 @@
     const width = maxX - minX;
     const height = maxY - minY;
 
-    // Distance from center (normalized coordinates 0-1)
     const distX = Math.abs(centerX - 0.5);
     const distY = Math.abs(centerY - 0.5);
     const dist = Math.sqrt(distX * distX + distY * distY);
 
-    // Size score: face should be appropriate size
     const size = width * height;
-    const sizeScore = Math.min(size * 1000, 100); // Adjust multiplier
+    const sizeScore = Math.min(size * 1200, 100);
+    const centerScore = Math.max(0, 100 - dist * 300);
 
-    // Position score: more forgiving for nodding movements
-    // Allow more vertical movement since nodding requires up/down motion
-    const verticalTolerance = 0.25; // Increased from default
-    const horizontalTolerance = 0.15; // Keep horizontal strict
-
-    const verticalScore = Math.max(0, 100 - distY * 300); // More forgiving vertically
-    const horizontalScore = Math.max(0, 100 - distX * 500); // Keep horizontal strict
-
-    const posScore = Math.min(verticalScore, horizontalScore); // Use the more restrictive score
-
-    return Math.min(sizeScore, posScore);
+    return Math.min(100, centerScore * 0.6 + sizeScore * 0.4);
   }
 
-  function detectSmile(landmarks: any): boolean {
-    // Much more sensitive smile detection
-    const leftMouthCorner = landmarks[61];
-    const rightMouthCorner = landmarks[291];
-    const upperLip = landmarks[13];
-    const lowerLip = landmarks[14];
-    const noseTip = landmarks[1];
-
-    // Calculate mouth width and position relative to nose
-    const mouthWidth = Math.abs(rightMouthCorner.x - leftMouthCorner.x);
-    const mouthCenterY = (leftMouthCorner.y + rightMouthCorner.y) / 2;
-    const mouthOpenness = Math.abs(upperLip.y - lowerLip.y);
-
-    // Very relaxed smile detection - any upward mouth movement
-    const cornersRaised =
-      leftMouthCorner.y < noseTip.y + 0.08 && rightMouthCorner.y < noseTip.y + 0.08; // More lenient
-    const someOpenness = mouthOpenness > 0.01 && mouthOpenness < 0.25; // Wider range
-    const visibleWidth = mouthWidth > 0.06; // More lenient
-
-    return cornersRaised && (someOpenness || visibleWidth); // OR condition makes it easier
-  }
-
-  function detectBlink(landmarks: any): boolean {
-    // Enhanced blink detection with better thresholds
-    // Left eye: points 33, 160, 158, 133, 153, 144
-    const leftEye = [
-      landmarks[33],
-      landmarks[160],
-      landmarks[158],
-      landmarks[133],
-      landmarks[153],
-      landmarks[144],
-    ];
-    const earLeft =
-      (Math.abs(leftEye[1].y - leftEye[5].y) + Math.abs(leftEye[2].y - leftEye[4].y)) /
-      (2 * Math.abs(leftEye[0].x - leftEye[3].x));
-
-    // Right eye: points 362, 385, 387, 263, 373, 380
-    const rightEye = [
-      landmarks[362],
-      landmarks[385],
-      landmarks[387],
-      landmarks[263],
-      landmarks[373],
-      landmarks[380],
-    ];
-    const earRight =
-      (Math.abs(rightEye[1].y - rightEye[5].y) + Math.abs(rightEye[2].y - rightEye[4].y)) /
-      (2 * Math.abs(rightEye[0].x - rightEye[3].x));
-
-    // Much more forgiving blink detection - any partial closure counts
-    return earLeft < 0.35 && earRight < 0.35; // Increased threshold, removed minimum
-  }
-
-  function detectTurnLeft(landmarks: any): boolean {
-    const noseTip = landmarks[1];
-    const noseX = noseTip.x;
-
-    // Calibrate center position on first frames if not set
-    if (centerNoseX === 0.5 && Math.abs(noseX - 0.5) < 0.1) {
-      centerNoseX = noseX;
-      console.log(`[CALIBRATION] Set center nose X to: ${centerNoseX.toFixed(3)}`);
+  // ─────────────────────────────────────────────────────────────
+  // UI Copy helpers
+  // ─────────────────────────────────────────────────────────────
+  $: mainInstruction = (() => {
+    switch (phase) {
+      case 'camera_setup':
+        return 'Initializing camera...';
+      case 'selfie_capture':
+        return latestLandmarks ? 'Position your face in the frame' : 'Looking for your face...';
+      case 'analyzing':
+        return 'Analyzing...';
+      case 'challenge':
+        return currentChallenge?.name || 'Follow the instruction';
+      case 'submitting':
+        return 'Verifying...';
+      case 'completed':
+        return 'Liveness verified successfully!';
+      case 'failed':
+        return 'Unable to verify. Please try again.';
+      default:
+        return '';
     }
+  })();
 
-    // Calculate deviation from calibrated center
-    const deviation = centerNoseX - noseX;
-    const threshold = 0.08; // Very forgiving - just need slight left movement
-
-    // Debug logging
-    console.log(
-      `[TURN_LEFT] Nose X: ${noseX.toFixed(3)}, Center: ${centerNoseX.toFixed(
-        3,
-      )}, Deviation: ${deviation.toFixed(3)}, Threshold: ${threshold}`,
-    );
-
-    // Detect turn left if nose is significantly left of calibrated center
-    return deviation > threshold;
-  }
-
-  function detectTurnRight(landmarks: any): boolean {
-    const noseTip = landmarks[1];
-    const noseX = noseTip.x;
-
-    // Calibrate center position on first frames if not set
-    if (centerNoseX === 0.5 && Math.abs(noseX - 0.5) < 0.1) {
-      centerNoseX = noseX;
-      console.log(`[CALIBRATION] Set center nose X to: ${centerNoseX.toFixed(3)}`);
-    }
-
-    // Calculate deviation from calibrated center
-    const deviation = noseX - centerNoseX;
-    const threshold = 0.08; // Very forgiving - just need slight right movement
-
-    // Debug logging
-    console.log(
-      `[TURN_RIGHT] Nose X: ${noseX.toFixed(3)}, Center: ${centerNoseX.toFixed(
-        3,
-      )}, Deviation: ${deviation.toFixed(3)}, Threshold: ${threshold}`,
-    );
-
-    // Detect turn right if nose is significantly right of calibrated center
-    return deviation > threshold;
-  }
-
-  function detectNod(landmarks: any): boolean {
-    const noseTip = landmarks[1];
-    const forehead = landmarks[10]; // Top of head/forehead
-
-    // Track vertical head position - nodding causes significant vertical movement
-    const currentNoseY = noseTip.y;
-    const headSize = Math.abs(forehead.y - noseTip.y);
-
-    // Initialize previous nose position if not set
-    if (!previousNoseY) {
-      previousNoseY = currentNoseY;
-      return false;
-    }
-
-    // Detect nodding: nose moves down significantly compared to head size
-    const verticalMovement = Math.abs(currentNoseY - previousNoseY);
-    const nodThreshold = headSize * 0.1; // 10% of head size as threshold
-
-    // Detect both directions of nodding (down and up motion)
-    const isNodding = verticalMovement > nodThreshold;
-
-    // Update previous position for next frame
-    previousNoseY = currentNoseY;
-
-    return isNodding;
-  }
-
-  function detectLookUp(landmarks: any): boolean {
-    // Use eye landmarks to detect looking up
-    const leftEyeCenter = landmarks[33];
-    const rightEyeCenter = landmarks[362];
-    const noseTip = landmarks[1];
-
-    // When looking up, eyes appear higher relative to nose
-    const eyeNoseDistance = (leftEyeCenter.y + rightEyeCenter.y) / 2 - noseTip.y;
-    return eyeNoseDistance < -0.08; // Eyes significantly above nose position
-  }
-
-  function captureSnapshot() {
-    const canvas = document.createElement('canvas');
-    canvas.width = videoElement.videoWidth;
-    canvas.height = videoElement.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoElement, 0, 0);
-    return canvas.toDataURL('image/jpeg');
-  }
-
-  function onResults(results: any) {
-    if (!canvasElement || !results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-      statusMessage = 'No face detected. Please position your face in the frame.';
-      positionScore = 0;
-      return;
-    }
-
-    const landmarks = results.multiFaceLandmarks[0];
-    positionScore = calculatePositionScore(landmarks);
-
-    // Enhanced quality assessment
-    const qualityScore = assessImageQuality(landmarks);
-
-    // Track motion for PAD analysis
-    if (previousLandmarks) {
-      const currentMotion = calculateMovement(previousLandmarks, landmarks);
-      motionHistory.push(currentMotion);
-      if (motionHistory.length > 30) motionHistory.shift(); // Keep last 30 frames
-    }
-
-    // Relaxed quality threshold - more user-friendly
-    const MIN_QUALITY_THRESHOLD = 40; // Reduced from 60
-    if (qualityScore < MIN_QUALITY_THRESHOLD) {
-      statusMessage = `Position your face better and ensure good lighting.`;
-      isChecking = false;
-      return;
-    }
-
-    // More forgiving position check for nodding challenges
-    const currentChallenge = challenges[currentStepIndex];
-    const isNodChallenge = currentChallenge?.id === 'nod';
-    const positionThreshold = isNodChallenge ? 50 : 70; // Lower threshold for nodding
-
-    if (positionScore < positionThreshold) {
-      statusMessage = isNodChallenge
-        ? 'Keep your face in view while nodding.'
-        : 'Position your face within the oval guide.';
-      isChecking = false;
-      return;
-    }
-
-    // Face is positioned, start action checks
-    if (!isChecking && challenges.length > 0 && currentStepIndex < challenges.length) {
-      isChecking = true;
-      statusMessage = `Step ${currentStepIndex + 1}/${
-        challenges.length
-      }: ${currentChallenge.name.toUpperCase()}`;
-    }
-
-    if (currentStepIndex >= challenges.length) return; // All challenges completed
-
-    if (!currentChallenge) return; // Safety check
-
-    let actionDetected = false;
-
-    // Dynamic action detection based on randomized challenges
-    switch (currentChallenge.id) {
-      case 'smile':
-        actionDetected = detectSmile(landmarks);
-        break;
-      case 'blink':
-        actionDetected = detectBlink(landmarks);
-        break;
-      case 'turn_left':
-        actionDetected = detectTurnLeft(landmarks);
-        break;
-      case 'turn_right':
-        actionDetected = detectTurnRight(landmarks);
-        break;
-      case 'nod':
-        actionDetected = detectNod(landmarks);
-        break;
-      case 'look_up':
-        actionDetected = detectLookUp(landmarks);
-        break;
-    }
-
-    // Enhanced PAD and quality tracking
-    const padScore = detectPresentationAttack(landmarks, currentChallenge.id);
-    qualityScores[currentStepIndex] = Math.round(qualityScore);
-    padScores[currentStepIndex] = Math.round(padScore);
-
-    // Track action consistency - require stable detection for reliability
-    if (actionDetected) {
-      actionConsistency[currentStepIndex]++;
-    } else {
-      actionConsistency[currentStepIndex] = 0;
-    }
-
-    // Require consistent detection for multiple frames before counting
-    const MIN_CONSISTENT_FRAMES = 2; // Must detect action for 2 consecutive frames
-    if (actionConsistency[currentStepIndex] >= MIN_CONSISTENT_FRAMES && padScore > 70) {
-      stepTimers[currentStepIndex]++;
-      actionConsistency[currentStepIndex] = 0; // Reset after counting a frame
-    }
-
-    if (stepTimers[currentStepIndex] >= currentChallenge.duration) {
-      stepCompleted[currentStepIndex] = true;
-      snapshots.push(captureSnapshot());
-      currentStepIndex++;
-
-      if (currentStepIndex >= challenges.length) {
-        // Calculate final liveness score based on quality and PAD scores
-        const avgQuality = qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length;
-        const avgPad = padScores.reduce((a, b) => a + b, 0) / padScores.length;
-        livenessScore = Math.round((avgQuality + avgPad) / 2);
-
-        statusMessage = 'All steps completed! Submitting results...';
-        isChecking = false;
-        isSubmitting = true;
-
-        // Enhanced liveness result submission
-        submitEnhancedLivenessResult();
-      } else {
-        const nextChallenge = challenges[currentStepIndex];
-        statusMessage = `Step ${currentStepIndex + 1}/${challenges.length}: Please ${
-          nextChallenge.name
-        }`;
-        stepTimers[currentStepIndex] = 0;
-        // Reset nose calibration for new challenge
-        centerNoseX = 0.5;
-        console.log(`[RESET] Nose calibration reset for new challenge: ${nextChallenge.name}`);
-      }
-    } else if (padScore <= 70) {
-      statusMessage = 'Try again naturally.'; // Only show if really suspicious
-      stepTimers[currentStepIndex] = Math.max(0, stepTimers[currentStepIndex] - 1); // Gentle reset
-    } else {
-      const progress = Math.round((stepTimers[currentStepIndex] / currentChallenge.duration) * 100);
-      statusMessage = `${currentChallenge.name.toUpperCase()} - Progress: ${progress}%`;
-    }
-
-    // Canvas clear
-    const ctx = canvasElement.getContext('2d');
-    if (ctx) {
-      ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    }
-  }
-
-  async function submitEnhancedLivenessResult() {
-    const currentBvn = $bvnValue || '';
-    const verificationData = {
-      sessionId,
-      bvn: currentBvn,
-      livenessScore,
-      challenges: challenges.map((c, i) => ({
-        challengeId: c.id,
-        completed: stepCompleted[i],
-        quality: qualityScores[i],
-        padScore: padScores[i],
-        duration: stepTimers[i],
-        snapshot: snapshots[i],
-      })),
-      metadata: {
-        userAgent: navigator.userAgent,
-        timestamp: Date.now(),
-        challengeDuration: Date.now() - challengeStartTime,
-        retryCount,
-      },
-      verificationId: localStorage.getItem('verificationId') || undefined,
-    };
-
-    try {
-      const result = await submitLivenessResult(verificationData);
-
-      if (result.success) {
-        statusMessage = 'Liveness verification completed successfully!';
-        console.log('Enhanced liveness result submitted:', result);
-
-        // Clear sensitive data
-        localStorage.removeItem('verificationId');
-      } else {
-        handleSubmissionFailure(result.message);
-      }
-    } catch (error) {
-      console.error('Failed to submit enhanced liveness results:', error);
-      handleSubmissionFailure('Network error during submission');
-    } finally {
-      isSubmitting = false;
-    }
-  }
-
-  function handleSubmissionFailure(message?: string) {
-    if (retryCount < MAX_RETRIES) {
-      retryCount++;
-      statusMessage = `Submission failed. Retrying... (${retryCount}/${MAX_RETRIES})`;
-
-      setTimeout(async () => {
-        await submitEnhancedLivenessResult();
-      }, 2000);
-    } else {
-      statusMessage = 'Unable to submit verification. Please contact support.';
-      // Log detailed failure for debugging
-      console.error('Liveness submission failed after retries:', {
-        sessionId,
-        attempts: retryCount,
-        finalError: message,
-      });
-    }
-  }
+  // Sub-instruction removed - now shown only in bottom hint pill
 </script>
 
-<div class="container" {style}>
-  {#each step.elements as element}
-    {#if element.type === Elements.Title}
-      <Title configuration={element.props}>
-        <T key="title" namespace={stepNamespace} />
-      </Title>
-    {/if}
-    {#if element.type === Elements.Paragraph}
-      <Paragraph configuration={element.props}>
-        <T key={element.props.context || 'description'} namespace={stepNamespace} />
-      </Paragraph>
-    {/if}
-    {#if element.type === Elements.VideoContainer}
-      <div class="video-container">
-        <div class="video-wrapper">
-          <video bind:this={videoElement} autoplay muted playsinline class="video-feed" />
-          <canvas bind:this={canvasElement} class="detection-overlay" width="640" height="480" />
-          <!-- Oval face detection window with progress -->
-          <div class="face-oval">
-            <svg class="oval-svg" viewBox="0 0 300 400" xmlns="http://www.w3.org/2000/svg">
-              <!-- Background oval guide -->
-              <ellipse
-                cx="150"
-                cy="200"
-                rx="120"
-                ry="160"
-                fill="none"
-                stroke="rgba(255,255,255,0.8)"
-                stroke-width="3"
-                stroke-dasharray="5,5"
-              />
-              <!-- Progress oval ring -->
-              <ellipse
-                cx="150"
-                cy="200"
-                rx="120"
-                ry="160"
-                fill="none"
-                stroke={strokeColor}
-                stroke-width="3"
-                stroke-dasharray={perimeter}
-                stroke-dashoffset={dashOffset}
-                transform="rotate(-180 150 200)"
-              />
-            </svg>
-          </div>
-        </div>
-      </div>
-
-      <!-- Enhanced status section with progress bar -->
-      <div class="status-section">
-        <div
-          class="status-message"
-          class:warning={statusMessage.includes('Suspicious') || statusMessage.includes('failed')}
-          class:error={statusMessage.includes('Unable') || statusMessage.includes('error')}
-          class:success={statusMessage.includes('completed successfully')}
-        >
-          {statusMessage}
-        </div>
-
-        {#if isChecking && currentStepIndex < challenges.length && challenges[currentStepIndex]}
-          <div class="progress-container">
-            <div class="progress-bar">
-              <div
-                class="progress-fill"
-                style="width: {(stepTimers[currentStepIndex] /
-                  challenges[currentStepIndex].duration) *
-                  100}%"
-              />
-            </div>
-            <div class="progress-text">
-              {stepTimers[currentStepIndex]}/{challenges[currentStepIndex].duration} frames
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
-    {#if element.type === Elements.Button}
-      {#if currentStepIndex >= challenges.length}
-        <NextStepButton
-          configuration={element.props}
-          isDisabled={isSubmitting}
-          skipType={undefined}
-        >
-          {#if isSubmitting}
-            Submitting Results...
-          {:else}
-            <T key="button" namespace={stepNamespace} />
-          {/if}
-        </NextStepButton>
-      {:else if retryCount >= MAX_RETRIES}
-        <!-- Retry option after max retries exceeded -->
-        <div class="retry-section">
-          <p>Having trouble? Let's try again.</p>
-          <button class="retry-button" on:click={initializeChallenges} disabled={isSubmitting}>
-            Restart Verification
-          </button>
-        </div>
+<div class="page" {style}>
+  <!-- Top bar: back + close -->
+  <div class="top-bar">
+    {#each step.elements as element}
+      {#if element.type === Elements.IconButton}
+        <button class="icon-btn" on:click={() => history.back()} aria-label="back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+        </button>
       {/if}
+      {#if element.type === Elements.IconCloseButton}
+        <button class="icon-btn" on:click={() => window.dispatchEvent(new CustomEvent('close-flow'))} aria-label="close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      {/if}
+    {/each}
+  </div>
+
+  <!-- Camera Stage -->
+  <div class="stage">
+    <video bind:this={videoElement} autoplay muted playsinline class="video-feed" />
+    <canvas bind:this={analysisCanvas} class="detection-overlay" width="640" height="480" />
+
+    <!-- Vignette + oval -->
+    {#if phase === 'selfie_capture' || phase === 'challenge'}
+      <div class="vignette-mask" aria-hidden="true"></div>
+
+      <div class="face-oval">
+        <svg class="oval-svg" viewBox="0 0 300 400" preserveAspectRatio="xMidYMid meet">
+          <ellipse
+            cx="150"
+            cy="200"
+            rx="120"
+            ry="160"
+            fill="none"
+            stroke="rgba(45,212,191,0.6)"
+            stroke-width="3"
+            stroke-dasharray="8,6"
+          />
+          {#if ovalProgress > 0}
+            <ellipse
+              cx="150"
+              cy="200"
+              rx="120"
+              ry="160"
+              fill="none"
+              stroke={phase === 'challenge' ? '#14b8a6' : '#2dd4bf'}
+              stroke-width="5"
+              stroke-linecap="round"
+              stroke-dasharray={perimeter}
+              stroke-dashoffset={dashOffset}
+              transform="rotate(-180 150 200)"
+            />
+          {/if}
+        </svg>
+      </div>
     {/if}
-  {/each}
+
+    <!-- Overlay text -->
+    <div class="overlay" class:faded={phase === 'analyzing' || phase === 'submitting'}>
+      <div class="pill" class:success={phase === 'completed'} class:error={phase === 'failed'}>
+        {mainInstruction}
+      </div>
+      {#if phase === 'analyzing' || phase === 'submitting'}
+        <div class="spinner"></div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Bottom action bar -->
+  <div class="bottom-bar">
+    {#each step.elements as element}
+      {#if element.type === Elements.Button}
+        {#if phase === 'camera_setup'}
+          <NextStepButton configuration={element.props} isDisabled={true} skipType={undefined}>
+            Initializing camera...
+          </NextStepButton>
+        {:else if phase === 'selfie_capture'}
+          <!-- Auto-captures when face is centered; no manual button needed -->
+          <div class="hint-pill">
+            <span class="dot"></span>
+            {#if latestLandmarks && positionScore >= 0.72}
+              Hold still
+            {:else}
+              Auto-capture when centered
+            {/if}
+          </div>
+        {:else if phase === 'challenge'}
+          <div class="hint-pill">
+            <span class="dot"></span>
+            Hold the pose
+          </div>
+        {:else if phase === 'failed'}
+          <button class="action-button" on:click={retry}>Try Again</button>
+        {:else if phase === 'completed'}
+          <NextStepButton configuration={element.props} isDisabled={false} skipType={undefined}>
+            Continue
+          </NextStepButton>
+        {:else if phase === 'submitting'}
+          <NextStepButton configuration={element.props} isDisabled={true} skipType={undefined}>
+            Verifying...
+          </NextStepButton>
+        {/if}
+      {/if}
+    {/each}
+  </div>
 </div>
 
 <style>
-  .container {
+  .page {
     display: flex;
     flex-direction: column;
+    min-height: 100%;
     height: 100%;
-    padding: var(--padding);
-    position: var(--position);
-    background: var(--background);
-    line-height: var(--line-height);
-    text-align: center;
-    gap: 1rem;
-    align-items: center;
-  }
-
-  .video-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .video-wrapper {
-    position: relative;
-    width: 100%;
-    max-width: 400px;
-    aspect-ratio: 4/3;
-    margin: 0 auto;
-    border-radius: 16px;
+    background: #0b0b0c;
+    color: #ffffff;
     overflow: hidden;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    position: relative;
+  }
+
+  .top-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    pointer-events: none;
+  }
+
+  .top-bar > * {
+    pointer-events: auto;
+  }
+
+  .icon-btn {
+    background: rgba(0,0,0,0.35);
+    border: none;
+    color: #fff;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    padding: 0;
+  }
+
+  .icon-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .stage {
+    flex: 1 1 auto;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    min-height: 0;
   }
 
   .video-feed {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
-    background: #000;
+    transform: scaleX(-1);
   }
 
   .detection-overlay {
     position: absolute;
-    top: 0;
-    left: 0;
+    inset: 0;
     width: 100%;
     height: 100%;
     pointer-events: none;
   }
 
+  .vignette-mask {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      ellipse 52% 62% at 50% 45%,
+      rgba(0,0,0,0) 0%,
+      rgba(0,0,0,0) 52%,
+      rgba(0,0,0,0.55) 72%,
+      rgba(0,0,0,0.82) 100%
+    );
+  }
+
   .face-oval {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -845,114 +675,142 @@
   }
 
   .oval-svg {
-    width: 100%;
-    height: 100%;
+    width: min(92vw, 360px);
+    height: auto;
+    max-height: 72vh;
   }
 
   .oval-svg ellipse {
-    transition: stroke 0.3s ease, stroke-dashoffset 0.3s ease;
+    transition: stroke-dashoffset 0.25s ease, stroke 0.25s ease;
   }
 
-  .status-message {
-    font-size: 1.1rem;
-    font-weight: 500;
-    color: #333;
-    min-height: 3rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    padding: 0 1rem;
-    transition: color 0.3s ease;
-  }
-
-  .status-message.warning {
-    color: #ff6b35;
-  }
-
-  .status-message.error {
-    color: #dc3545;
-  }
-
-  .status-message.success {
-    color: #28a745;
-  }
-
-  .retry-section {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-    margin-top: 1rem;
-  }
-
-  .retry-section p {
-    color: #666;
-    font-size: 0.9rem;
-    text-align: center;
-  }
-
-  .retry-button {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
-    padding: 12px 24px;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-  }
-
-  .retry-button:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-  }
-
-  .retry-button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
-  }
-
-  .status-section {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.75rem;
-    min-height: 4rem;
-  }
-
-  .progress-container {
+  .overlay {
+    position: absolute;
+    top: 50px;
+    left: 0;
+    right: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 0.5rem;
-    width: 100%;
-    max-width: 300px;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    padding: 0 1rem;
   }
 
-  .progress-bar {
-    width: 100%;
-    height: 8px;
-    background-color: #e0e0e0;
-    border-radius: 4px;
-    overflow: hidden;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+  .overlay.faded {
+    opacity: 0.55;
   }
 
-  .progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #4caf50, #66bb6a);
-    border-radius: 4px;
-    transition: width 0.2s ease;
-    box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3);
-  }
-
-  .progress-text {
+  .pill {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 0.875rem;
-    color: #666;
     font-weight: 500;
+    line-height: 1.25;
+    color: #ffffff;
+    text-align: center;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    padding: 0.5rem 0.875rem;
+    background: rgba(0,0,0,0.5);
+    border-radius: 999px;
+    backdrop-filter: blur(8px);
+    max-width: 85%;
+    letter-spacing: -0.01em;
+  }
+
+  .pill.success {
+    background: rgba(20, 184, 166, 0.9);
+  }
+
+  .pill.error {
+    background: rgba(239, 68, 68, 0.9);
+  }
+
+  .sub {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 1.3;
+    color: rgba(255,255,255,0.85);
+    text-align: center;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    max-width: 80%;
+    letter-spacing: -0.01em;
+  }
+
+  .spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid rgba(255,255,255,0.25);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .bottom-bar {
+    flex: 0 0 auto;
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem 1.25rem 1.5rem;
+    background: #0b0b0c;
+    gap: 0.5rem;
+  }
+
+  .hint-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.25;
+    color: #f0fdfa;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(45, 212, 191, 0.25);
+    padding: 0.5rem 0.875rem;
+    border-radius: 999px;
+    letter-spacing: -0.01em;
+  }
+
+  .hint-pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #2dd4bf;
+    animation: pulse 1.4s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .action-button {
+    width: 100%;
+    border: none;
+    padding: 14px 24px;
+    border-radius: 12px;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    transition: transform 0.1s ease, opacity 0.2s ease;
+    background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+    color: white;
+  }
+
+  .action-button:active {
+    transform: scale(0.98);
   }
 </style>

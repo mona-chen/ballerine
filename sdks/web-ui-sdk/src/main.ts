@@ -28,14 +28,26 @@ export const flows: BallerineSDKFlows = {
       const { translations: _translations, ...configWithoutTranslations } = config;
 
       // Extract config from query params
-      const { clientId, flowName, ...endUserInfoFromQueryParams } = getConfigFromQueryParams();
+      const { clientId, flowName, baseUrl, redirectUrl, sessionId, ...endUserInfoFromQueryParams } = getConfigFromQueryParams();
+
+      // Merge baseUrl from query params into backendConfig if provided
+      const mergedBackendConfig = baseUrl
+        ? {
+            ...configWithoutTranslations.backendConfig,
+            baseUrl: baseUrl,
+          }
+        : configWithoutTranslations.backendConfig;
 
       // Merge the two config objects
       const mergedConfig: FlowsInitOptions = {
         ...configWithoutTranslations,
+        backendConfig: mergedBackendConfig,
         endUserInfo: {
           ...configWithoutTranslations.endUserInfo,
           ...endUserInfoFromQueryParams,
+          // Session ID and redirect URL can be passed via query params
+          ...(sessionId && { sessionId }),
+          ...(redirectUrl && { redirectUrl }),
         },
       };
 

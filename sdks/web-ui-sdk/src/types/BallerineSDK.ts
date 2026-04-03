@@ -90,6 +90,14 @@ export interface EndUserInfo {
   email?: string;
   language?: string;
   endUserMetadata?: Record<string, string>;
+  /**
+   * @description Session ID for liveness verification, typically passed via URL parameter
+   */
+  sessionId?: string;
+  /**
+   * @description Redirect URL after successful verification
+   */
+  redirectUrl?: string;
 }
 
 export interface FlowsBackendConfigEndpoints {

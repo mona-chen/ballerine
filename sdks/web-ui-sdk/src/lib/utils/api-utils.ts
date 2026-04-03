@@ -4,6 +4,7 @@ import {
   IStoreData,
   selectedDocumentInfo,
   selfieUri,
+  livenessResult,
 } from '../contexts/app-state';
 import { IAppConfiguration } from '../contexts/configuration';
 import { verifyDocuments } from '../services/http';
@@ -21,6 +22,7 @@ export const verifyDocumentsAndCloseFlow = (configuration: IAppConfiguration) =>
   let _documents: IDocument[] = [];
   let _selectedDocumentInfo;
   let _selfie;
+  let _liveness;
 
   documents.update(d => {
     _documents = d;
@@ -37,10 +39,16 @@ export const verifyDocumentsAndCloseFlow = (configuration: IAppConfiguration) =>
     return d;
   });
 
+  livenessResult.update(d => {
+    _liveness = d;
+    return d;
+  });
+
   const data: IStoreData = {
     docs: _documents,
     selectedDocumentInfo: _selectedDocumentInfo,
     selfie: _selfie,
+    liveness: _liveness,
   };
 
   return verifyDocuments(data);

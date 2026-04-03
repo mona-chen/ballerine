@@ -14,6 +14,9 @@ export const getConfigFromQueryParams = () => {
     b_em,
     b_lang,
     b_eut,
+    b_url,
+    b_redirect,
+    b_session,
     // /?b_uid=&b_cid= --> { b_uid: '', b_cid: '' };
   } = Object.fromEntries(new URLSearchParams(window.location.search));
 
@@ -28,6 +31,9 @@ export const getConfigFromQueryParams = () => {
     email: b_em,
     language: b_lang,
     type: b_eut,
+    baseUrl: b_url,
+    redirectUrl: b_redirect,
+    sessionId: b_session,
   };
 
   // Make sure no empty strings are passed to the config

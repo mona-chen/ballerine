@@ -11,6 +11,7 @@
   export let isLoading = false;
   export let configuration: IElementProps;
   export let skipType: string | undefined;
+  export let advanceOnClick = true;
 
   const background =
     $globalConfiguration.components?.button?.background ||
@@ -27,17 +28,22 @@
   );
 
   let disabled: boolean;
-  const onClick = () => {
-    if (disabled) return;
-
-    goToNextStep(currentStepId, $globalConfiguration, $currentStepId, skipType);
-    isDisabled = true;
-  };
 
   $: disabled = isDisabled || isLoading;
 </script>
 
-<button {style} {disabled} on:click={onClick}>
+<button
+  {style}
+  {disabled}
+  on:click={() => {
+    if (disabled) return;
+    if (advanceOnClick) {
+      goToNextStep(currentStepId, $globalConfiguration, $currentStepId, skipType);
+      isDisabled = true;
+    }
+  }}
+  on:click
+>
   {#if isLoading}
     <div class="loader-container">
       <Loader />

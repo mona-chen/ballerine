@@ -213,6 +213,15 @@
       "placeholder": "Enter 11-digit BVN",
       "button": "Continue"
     },
+    "liveness-start": {
+      "title": "Verify your identity",
+      "description": "We'll take a quick photo of your face to confirm you're a real person. This helps keep your account secure.",
+      "feature1": "Takes less than 10 seconds",
+      "feature2": "Your data is encrypted and secure",
+      "feature3": "No photos are stored without permission",
+      "button": "Start verification",
+      "privacy": "By continuing, you agree to our privacy policy and consent to facial verification."
+    },
     "liveness-check": {
       "title": "Liveness Check",
       "description": "We need to verify that you're a real person. Please position your face in the camera and follow the instructions.",

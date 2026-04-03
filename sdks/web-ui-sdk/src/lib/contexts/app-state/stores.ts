@@ -60,3 +60,6 @@ export const currentStepId = writable<string>('welcome');
 
 // BVN value for liveness verification
 export const bvnValue = writable<string>('');
+
+// Liveness verification result for flow context sync
+export const livenessResult = writable<Record<string, unknown> | undefined>();

@@ -103,21 +103,16 @@ const ballerineInitConfig: FlowsInitOptions = {
           { name: Steps.Final, id: Steps.Final },
         ],
       },
-      ['bvn-liveness-flow']: {
+      ['liveness-flow']: {
         steps: [
           {
-            name: Steps.Welcome,
-            id: Steps.Welcome,
-          },
-          {
-            name: Steps.BvnCollection,
-            id: Steps.BvnCollection,
+            name: Steps.LivenessStart,
+            id: Steps.LivenessStart,
           },
           {
             name: Steps.LivenessCheck,
             id: Steps.LivenessCheck,
           },
-          { name: Steps.Loading, id: Steps.Loading },
           { name: Steps.Final, id: Steps.Final },
         ],
       },
@@ -127,8 +122,12 @@ const ballerineInitConfig: FlowsInitOptions = {
     enabled: false, // Disable metrics in development to avoid CORS issues
   },
   backendConfig: {
+    baseUrl: 'http://localhost:3000/api/v1',
     auth: {
       authorizationHeader: 'Bearer 12345678-1234-1234-1234-123456789000',
+    },
+    endpoints: {
+      submitLivenessResult: '/compliance/verify_liveness',
     },
   },
 };
@@ -137,7 +136,7 @@ console.log(ballerineInitConfig);
 
 void flows.init(ballerineInitConfig).then(() => {
   void flows.mount({
-    flowName: 'bvn-liveness-flow',
+    flowName: 'liveness-flow',
     useModal: true,
   });
 });

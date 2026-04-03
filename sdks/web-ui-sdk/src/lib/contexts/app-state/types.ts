@@ -66,6 +66,7 @@ export interface IStoreData {
   docs: IDocument[];
   selectedDocumentInfo?: IDocumentInfo;
   selfie?: string;
+  liveness?: Record<string, unknown>;
 }
 
 export interface IStep {
